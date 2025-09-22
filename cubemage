@@ -1,0 +1,544 @@
+#!/usr/bin/env bash
+# ================================================
+# @Description  : CubeMage 卸载脚本
+# @Version      : 1.0.0
+# @Author       : CubeMage <cubemage.com@gmail.com>
+# @Date         : 2025-09-23
+# @LastEditTime : 2025-09-23
+# @LastEditors  : CubeMage
+# @Copyright    : Copyright (C) 2025 CubeMage
+# @License      : This program is free software under the AGPLv3 license.
+# @License-Details: See the LICENSE file for details.
+# ================================================
+set -euo pipefail
+
+BASE_DIR="/etc/cubemage"
+CONF_DIR="$BASE_DIR/tuxingsun"
+CHANNELS_DIR="$CONF_DIR/channels"
+ACTIVE_LINK="$CONF_DIR/active"
+ACTIVE_CONF="$ACTIVE_LINK/wg.conf"
+CUBE_CFG="$BASE_DIR/config"
+SYSTEMD_UNIT="cubemage-txs.service"
+
+LANG_CODE="zh"; [[ -f "$CUBE_CFG" ]] && LANG_CODE="$(. "$CUBE_CFG"; echo "${LANG:-zh}")"
+
+# --- FIX: Renamed 'tr' to 'i18n' to avoid conflict with /usr/bin/tr ---
+i18n(){
+  local k="$1"
+  case "$LANG_CODE" in
+    en)
+      case "$k" in
+        NEED_ROOT) echo "Root privileges required (use sudo).";;
+        STARTING) echo "Starting service...";;
+        STOPPING) echo "Stopping service...";;
+        RESTARTING) echo "Restarting service...";;
+        STATUS) echo "Service status:";;
+        SERVER_READY) echo "Server is ready.";;
+        CH_CREATED) echo "Channel created:";;
+        CH_UPDATED) echo "Channel updated:";;
+        CH_DELETED) echo "Channel deleted:";;
+        CH_SWITCH_TO) echo "Switching to channel:";;
+        CH_MISSING) echo "Channel not found:";;
+        CH_LIST) echo "Channels:";;
+        CLIENT_CREATED) echo "Client created:";;
+        CLIENT_UPDATED) echo "Client updated:";;
+        CLIENT_DELETED) echo "Client deleted:";;
+        CONF_PATH) echo "Config path:";;
+        QRCODE) echo "QR code (scan with WireGuard app):";;
+        LANG_SET_TO) echo "Language set to:";;
+        USAGE) cat <<'U'
+Usage:
+  cubemage lng [zh|en]
+  cubemage txs init [--channel=default] [--address=10.7.0.1/24] [--port=51820] [--wan-if=eth0]
+  cubemage txs server start|stop|restart|status
+  cubemage txs channel create <name> [--address=...] [--port=...] [--wan-if=...]
+  cubemage txs channel update <name> [--address=...] [--port=...] [--wan-if=...]
+  cubemage txs channel delete <name>
+  cubemage txs channel use <name>
+  cubemage txs channel list
+  cubemage txs client create  --channel=<name> --name=<alice> --ip=<10.x.x.x> [--endpoint=host] [--port=51820] [--dns=1.1.1.1] [--mtu=1280] [--allowed=0.0.0.0/0]
+  cubemage txs client update  --channel=<name> --name=<alice> [--ip=...] [--endpoint=...] [--port=...] [--dns=...] [--mtu=...] [--allowed=...]
+  cubemage txs client delete  --channel=<name> --name=<alice>
+  cubemage txs client list    --channel=<name>
+  cubemage txs client <name> config|qrcode [--channel=<name>]
+  cubemage txs stop
+  cubemage txs uninstall
+U
+        ;;
+        *) echo "$k";;
+      esac;;
+    zh|*)
+      case "$k" in
+        NEED_ROOT) echo "需要 root 权限（请使用 sudo）。";;
+        STARTING) echo "正在启动服务...";;
+        STOPPING) echo "正在停止服务...";;
+        RESTARTING) echo "正在重启服务...";;
+        STATUS) echo "服务状态：";;
+        SERVER_READY) echo "服务器已就绪。";;
+        CH_CREATED) echo "已创建通道：";;
+        CH_UPDATED) echo "已更新通道：";;
+        CH_DELETED) echo "已删除通道：";;
+        CH_SWITCH_TO) echo "正在切换到通道：";;
+        CH_MISSING) echo "未找到该通道：";;
+        CH_LIST) echo "通道列表：";;
+        CLIENT_CREATED) echo "已创建客户端：";;
+        CLIENT_UPDATED) echo "已更新客户端：";;
+        CLIENT_DELETED) echo "已删除客户端：";;
+        CONF_PATH) echo "配置路径：";;
+        QRCODE) echo "二维码（手机 WireGuard 扫码导入）：";;
+        LANG_SET_TO) echo "语言已设置为：";;
+        USAGE) cat <<'U'
+用法：
+  cubemage lng [zh|en]
+  cubemage txs init [--channel=default] [--address=10.7.0.1/24] [--port=51820] [--wan-if=eth0]
+  cubemage txs server start|stop|restart|status
+  cubemage txs channel create <name> [--address=...] [--port=...] [--wan-if=...]
+  cubemage txs channel update <name> [--address=...] [--port=...] [--wan-if=...]
+  cubemage txs channel delete <name>
+  cubemage txs channel use <name>
+  cubemage txs channel list
+  cubemage txs client create  --channel=<name> --name=<alice> --ip=<10.x.x.x> [--endpoint=host] [--port=51820] [--dns=1.1.1.1] [--mtu=1280] [--allowed=0.0.0.0/0]
+  cubemage txs client update  --channel=<name> --name=<alice> [--ip=...] [--endpoint=...] [--port=...] [--dns=...] [--mtu=...] [--allowed=...]
+  cubemage txs client delete  --channel=<name> --name=<alice>
+  cubemage txs client list    --channel=<name>
+  cubemage txs client <name> config|qrcode [--channel=<name>]
+  cubemage txs stop
+  cubemage txs uninstall
+U
+        ;;
+        *) echo "$k";;
+      esac;;
+  esac
+}
+
+require_root(){ [[ $EUID -eq 0 ]] || { echo "$(i18n NEED_ROOT)"; exit 1; }; }
+kv(){ local k="$1"; shift || true; for a in "$@"; do case "$a" in --$k=*) echo "${a#*=}"; return 0;; esac; done; echo ""; }
+wan_if(){ ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $5;exit}'; }
+iface_name(){ ip -o link show type wireguard 2>/dev/null | awk -F': ' 'NR==1{print $2;exit}'; }
+
+ensure_pkgs(){
+  export DEBIAN_FRONTEND=noninteractive
+  if command -v apt >/dev/null 2>&1; then
+    apt update -y >/dev/null 2>&1 || true
+    apt install -y wireguard wireguard-tools iptables qrencode >/dev/null 2>&1 || true
+  elif command -v dnf >/dev/null 2>&1; then
+    dnf install -y wireguard-tools iptables qrencode >/dev/null 2>&1 || true
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y epel-release >/dev/null 2>&1 || true
+    yum install -y wireguard-tools iptables qrencode >/dev/null 2>&1 || true
+  fi
+}
+
+init_server(){
+  require_root; ensure_pkgs
+  local ch addr port wif
+  ch="$(kv channel "$@")"; ch="${ch:-default}"
+  addr="$(kv address "$@")"; addr="${addr:-10.7.0.1/24}"
+  port="$(kv port "$@")";   port="${port:-51820}"
+  wif="$(kv wan-if "$@")";  wif="${wif:-$(wan_if || echo eth0)}"
+  channel_create "$ch" --address="$addr" --port="$port" --wan-if="$wif"
+  systemctl enable "$SYSTEMD_UNIT" >/dev/null 2>&1 || true
+  systemctl restart "$SYSTEMD_UNIT" || true
+  echo "$(i18n SERVER_READY) ($(i18n CH_SWITCH_TO) $ch)"
+  systemctl --no-pager -l status "$SYSTEMD_UNIT" || true
+}
+
+lang_set(){
+  require_root
+  local code="${1:-zh}"
+  mkdir -p "$BASE_DIR"
+  echo "LANG=${code}" > "$BASE_DIR/config"
+  echo "$(i18n LANG_SET_TO) $code"
+}
+
+active_channel(){
+  [[ -L "$ACTIVE_LINK" ]] || { echo ""; return; }
+  readlink -f "$ACTIVE_LINK" | awk -F/ '{print $NF}'
+}
+
+ensure_dirs(){
+  mkdir -p "$CHANNELS_DIR" "$BASE_DIR/logs"
+  chmod 700 "$BASE_DIR" "$CONF_DIR" "$CHANNELS_DIR" || true
+}
+
+# --- FIX: Robust key generation directly into variables ---
+generate_channel_conf(){
+  local name="$1" address="$2" port="$3" wif="$4"
+  local dir="$CHANNELS_DIR/$name"
+  mkdir -p "$dir/clients.d"; chmod 700 "$dir"
+  umask 077
+  
+  local s_priv_val
+  s_priv_val=$(wg genkey) # Generate key directly to variable
+  
+  # Save keys to files for backup/reference, but don't use them for the config generation
+  echo -n "$s_priv_val" > "$dir/${name}_private.key"
+  echo -n "$s_priv_val" | wg pubkey > "$dir/${name}_public.key"
+
+  local net_prefix="${address%/*}"; net_prefix="${net_prefix%.*}.0/24"
+
+  cat >"$dir/wg.conf" <<CONF
+[Interface]
+Address    = ${address}
+ListenPort = ${port}
+PrivateKey = ${s_priv_val}
+
+# NAT/Forward (idempotent)
+PostUp   = iptables -C FORWARD -i %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -i %i -j ACCEPT; \
+           iptables -C FORWARD -o %i -j ACCEPT 2>/dev/null || iptables -A FORWARD -o %i -j ACCEPT; \
+           iptables -C FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT; \
+           iptables -t nat -C POSTROUTING -s ${net_prefix} -o ${wif} -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s ${net_prefix} -o ${wif} -j MASQUERADE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true; \
+           iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true; \
+           iptables -D FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true; \
+           iptables -t nat -D POSTROUTING -s ${net_prefix} -o ${wif} -j MASQUERADE 2>/dev/null || true
+CONF
+}
+
+channel_create(){
+  require_root; ensure_pkgs; ensure_dirs
+  local name="$1"; shift || true
+  local address port wif
+  address="$(kv address "$@")"; address="${address:-10.7.0.1/24}"
+  port="$(kv port "$@")";     port="${port:-51820}"
+  wif="$(kv wan-if "$@")";    wif="${wif:-$(wan_if || echo eth0)}"
+  generate_channel_conf "$name" "$address" "$port" "$wif"
+  ln -snf "$CHANNELS_DIR/$name" "$ACTIVE_LINK"
+  grep -q '^net\.ipv4\.ip_forward=1' /etc/sysctl.conf 2>/dev/null || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
+  sysctl -p >/dev/null || true
+  echo "$(i18n CH_CREATED) $name"
+}
+
+channel_update(){
+  require_root; ensure_dirs
+  local name="$1"; shift || true
+  local dir="$CHANNELS_DIR/$name"; [[ -d "$dir" ]] || { echo "$(i18n CH_MISSING) $name"; exit 1; }
+  local address port wif
+  address="$(kv address "$@")"; port="$(kv port "$@")"; wif="$(kv wan-if "$@")"
+  local old_addr old_port
+  old_addr="$(awk -F= '/^Address/ {gsub(/ /,"",$2);print $2; exit}' "$dir/wg.conf")"
+  old_port="$(awk -F= '/^ListenPort/ {gsub(/ /,"",$2);print $2; exit}' "$dir/wg.conf")"
+  address="${address:-$old_addr}"; port="${port:-$old_port}"; wif="${wif:-$(wan_if || echo eth0)}"
+  generate_channel_conf "$name" "$address" "$port" "$wif"
+  [[ "$(active_channel)" == "$name" ]] && systemctl restart "$SYSTEMD_UNIT" || true
+  echo "$(i18n CH_UPDATED) $name"
+}
+
+channel_delete(){
+  require_root
+  local name="$1"
+  [[ "$(active_channel)" == "$name" ]] && { echo "refuse to delete active channel"; exit 1; }
+  rm -rf "$CHANNELS_DIR/$name"
+  echo "$(i18n CH_DELETED) $name"
+}
+
+channel_use(){
+  require_root
+  local name="$1"; [[ -d "$CHANNELS_DIR/$name" ]] || { echo "$(i18n CH_MISSING) $name"; exit 1; }
+  ln -snf "$CHANNELS_DIR/$name" "$ACTIVE_LINK"
+  systemctl restart "$SYSTEMD_UNIT" || true
+  echo "$(i18n CH_SWITCH_TO) $name"
+}
+
+channel_list(){
+  echo "$(i18n CH_LIST)"
+  ls -1 "$CHANNELS_DIR" 2>/dev/null || echo "(empty)"
+  echo "active: $(active_channel || echo none)"
+}
+
+# --- FIX: Ultimate robust version, immune to whitespace and environment issues ---
+s_pub_from_conf() (
+    set -e 
+    local conf_file="$1"
+    local WG_BIN
+    WG_BIN="$(command -v wg)" || { echo "'wg' command not found"; exit 1; }
+    local server_priv_key
+    server_priv_key=$(grep '^[[:space:]]*PrivateKey' "$conf_file" | command cut -d '=' -f 2- | command tr -d '[[:space:]]')
+
+    if [[ -z "$server_priv_key" ]]; then
+        echo "FATAL: Could not find 'PrivateKey' in $conf_file" >&2
+        exit 1
+    fi
+    if [[ "${#server_priv_key}" -ne 44 ]]; then
+        echo "FATAL: Invalid 'PrivateKey' length in $conf_file" >&2
+        exit 1
+    fi
+    LC_ALL=C printf "%s" "$server_priv_key" | "$WG_BIN" pubkey | command tr -d '\n'
+)
+
+prefix_from_conf(){ awk -F= '/^Address/ {gsub(/ /,"",$2);print $2; exit}' "$1" | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)\.[0-9]+\/[0-9]+/\1/'; }
+listen_port_from_conf(){ awk -F= '/^ListenPort/ {gsub(/ /,"",$2);print $2; exit}' "$1"; }
+
+remove_peer_block(){
+  local conf="$1" pk="$2"
+  awk -v pk="$pk" '
+    BEGIN{blk=0; keep=1}
+    /^\[Peer\]$/ {blk=1; buf=$0 ORS; next}
+    {
+      if(blk){
+        buf=buf $0 ORS
+        if($0 ~ /^PublicKey[[:space:]]*=/ && index($0, pk)>0){keep=0}
+        if($0 ~ /^\[Peer\]$/ || $0 ~ /^\[Interface\]$/){
+          if(keep) printf "%s", buf; blk=0; keep=1; buf=""
+        }
+      } else { print }
+    }
+    END{ if(blk && keep) printf "%s", buf }
+  ' "$conf" > "$conf.tmp" && mv -f "$conf.tmp" "$conf"
+}
+
+public_ip(){
+  # Attempt to get public IP from multiple sources for reliability
+  curl -s https://ipinfo.io/ip || \
+  curl -s https://api.ipify.org || \
+  curl -s https://icanhazip.com || \
+  dig +short myip.opendns.com @resolver1.opendns.com || \
+  hostname -I | awk '{print $1}'
+}
+
+client_create(){
+  require_root
+  local ch name ip endpoint port dns mtu allowed
+  ch="$(kv channel "$@")"; name="$(kv name "$@")"; ip="$(kv ip "$@")"
+  # The --endpoint flag now becomes an optional override
+  endpoint="$(kv endpoint "$@")"
+  port="$(kv port "$@")"
+  dns="$(kv dns "$@")"; mtu="$(kv mtu "$@")"; allowed="$(kv allowed "$@")"
+  [[ -n "$ch" && -n "$name" ]] || { echo "need --channel and --name"; exit 1; }
+  local dir="$CHANNELS_DIR/$ch"; [[ -d "$dir" ]] || { echo "$(i18n CH_MISSING) $ch"; exit 1; }
+  local conf="$dir/wg.conf"; local cdir="$dir/clients.d"
+  mkdir -p "$cdir"; umask 077
+
+  local s_pub; s_pub="$(s_pub_from_conf "$conf")"
+  local prefix; prefix="$(prefix_from_conf "$conf")"; ip="${ip:-${prefix}.2}"
+  port="${port:-$(listen_port_from_conf "$conf")}"; dns="${dns:-1.1.1.1}"; mtu="${mtu:-1280}"; allowed="${allowed:-0.0.0.0/0}"
+
+  local pkey_file="$cdir/${name}_private.key" ukey_file="$cdir/${name}_public.key" cfile="$cdir/${name}.conf" meta="$cdir/${name}.meta"
+  
+  local c_priv c_pub
+  c_priv=$(wg genkey)
+  c_pub=$(printf "%s" "$c_priv" | wg pubkey)
+  
+  if [[ "${#c_priv}" -ne 44 || "${#c_pub}" -ne 44 ]]; then
+      echo "FATAL: Client key generation failed." >&2
+      exit 1
+  fi
+
+  echo -n "$c_priv" > "$pkey_file"
+  echo -n "$c_pub" > "$ukey_file"
+
+  local ifc; ifc="$(iface_name || true)"
+  if [[ -n "$ifc" ]]; then
+    wg set "$ifc" peer "$c_pub" allowed-ips "${ip}/32" || true
+  fi
+
+  if ! grep -qF "PublicKey = ${c_pub}" "$conf"; then
+    cat >>"$conf" <<PEER
+
+[Peer]
+PublicKey  = ${c_pub}
+AllowedIPs = ${ip}/32
+PEER
+  fi
+
+  # --- FIX: Automatically detect public IP for the Endpoint ---
+  local server_ip
+  # Use the endpoint if provided via flag, otherwise auto-detect public IP
+  if [[ -n "$endpoint" ]]; then
+    server_ip="$endpoint"
+  else
+    echo "Detecting server public IP..."
+    server_ip=$(public_ip)
+  fi
+  
+  local ep_line="Endpoint = ${server_ip}:${port}"
+  # --- END FIX ---
+
+  cat >"$cfile" <<CCONF
+[Interface]
+PrivateKey = ${c_priv}
+Address    = ${ip}/24
+DNS        = ${dns}
+MTU        = ${mtu}
+
+[Peer]
+PublicKey  = ${s_pub}
+${ep_line}
+AllowedIPs = ${allowed}
+PersistentKeepalive = 25
+CCONF
+  chmod 600 "$cfile"
+  cat >"$meta" <<META
+NAME=${name}
+PUB=${c_pub}
+IP=${ip}
+CONF=${cfile}
+CHANNEL=${ch}
+META
+
+  echo "$(i18n CLIENT_CREATED) $name ($(i18n CONF_PATH) $cfile)"
+  command -v qrencode >/dev/null 2>&1 && { echo "$(i18n QRCODE)"; qrencode -t ansiutf8 < "$cfile"; } || true
+}
+
+client_update(){
+  require_root
+  local ch name; ch="$(kv channel "$@")"; name="$(kv name "$@")"
+  [[ -n "$ch" && -n "$name" ]] || { echo "need --channel and --name"; exit 1; }
+  local d="$CHANNELS_DIR/$ch/clients.d"; local meta="$d/${name}.meta"; [[ -f "$meta" ]] || { echo "client not found: $name"; exit 1; }
+  . "$meta"
+  local conf="$CHANNELS_DIR/$ch/wg.conf"; local s_pub; s_pub="$(s_pub_from_conf "$conf")"
+  local ip endpoint port dns mtu allowed
+  ip="$(kv ip "$@")"; endpoint="$(kv endpoint "$@")"; port="$(kv port "$@")"; dns="$(kv dns "$@")"; mtu="$(kv mtu "$@")"; allowed="$(kv allowed "$@")"
+  [[ -n "$ip" ]] || ip="$IP"; [[ -n "$dns" ]] || dns="1.1.1.1"; [[ -n "$mtu" ]] || mtu="1280"; [[ -n "$allowed" ]] || allowed="0.0.0.0/0"
+  [[ -n "$port" ]] || port="$(listen_port_from_conf "$conf")"
+
+  local ifc; ifc="$(iface_name || true)"
+  [[ -n "$ifc" ]] && wg set "$ifc" peer "$PUB" remove || true
+  [[ -n "$ifc" ]] && wg set "$ifc" peer "$PUB" allowed-ips "${ip}/32" || true
+
+  remove_peer_block "$conf" "$PUB"
+  cat >>"$conf" <<PEER
+
+[Peer]
+PublicKey  = ${PUB}
+AllowedIPs = ${ip}/32
+PEER
+
+  local cfile="$CONF"
+  local ep_line; [[ -n "$endpoint" ]] && ep_line="Endpoint   = ${endpoint}" || ep_line="# Endpoint   = <server-ip-or-domain>:${port}"
+  if [[ -n "$endpoint" && "$endpoint" != *:* ]]; then ep_line="Endpoint   = ${endpoint}:${port}"; fi
+
+  local c_priv; c_priv="$(command tr -d '\n' < "$d/${name}_private.key")" # FIX: Use 'command tr'
+  cat >"$cfile" <<CCONF
+[Interface]
+PrivateKey = ${c_priv}
+Address    = ${ip}/24
+DNS        = ${dns}
+MTU        = ${mtu}
+
+[Peer]
+PublicKey  = ${s_pub}
+${ep_line}
+AllowedIPs = ${allowed}
+PersistentKeepalive = 25
+CCONF
+
+  cat >"$meta" <<META
+NAME=${name}
+PUB=${PUB}
+IP=${ip}
+CONF=${cfile}
+CHANNEL=${ch}
+META
+
+  echo "$(i18n CLIENT_UPDATED) $name"
+}
+
+client_delete(){
+  require_root
+  local ch name; ch="$(kv channel "$@")"; name="$(kv name "$@")"
+  [[ -n "$ch" && -n "$name" ]] || { echo "need --channel and --name"; exit 1; }
+  local d="$CHANNELS_DIR/$ch/clients.d"; local meta="$d/${name}.meta"; [[ -f "$meta" ]] || { echo "client not found: $name"; exit 1; }
+  . "$meta"
+  local conf="$CHANNELS_DIR/$ch/wg.conf"
+  local ifc; ifc="$(iface_name || true)"
+  [[ -n "$ifc" ]] && wg set "$ifc" peer "$PUB" remove || true
+  remove_peer_block "$conf" "$PUB"
+  rm -f "$meta" "$d/${name}_private.key" "$d/${name}_public.key" "$CONF" 2>/dev/null || true
+  echo "$(i18n CLIENT_DELETED) $name"
+}
+
+client_list(){
+  local ch; ch="$(kv channel "$@")"; ch="${ch:-$(active_channel || echo default)}"
+  local d="$CHANNELS_DIR/$ch/clients.d"
+  [[ -d "$d" ]] || { echo "(empty)"; return; }
+  shopt -s nullglob
+  local any=0
+  for m in "$d"/*.meta; do
+    any=1; . "$m"; echo "- ${NAME} | IP=${IP} | CONF=${CONF}"
+  done
+  shopt -u nullglob
+  [[ $any -eq 1 ]] || echo "(empty)"
+}
+
+client_show(){
+  local name="$1"; local op="${2:-}"; shift || true
+  local ch; ch="$(kv channel "$@")"; ch="${ch:-$(active_channel || echo default)}"
+  local meta="$CHANNELS_DIR/$ch/clients.d/${name}.meta"
+  [[ -f "$meta" ]] || { echo "client not found: $name"; exit 1; }
+  . "$meta"
+  case "$op" in
+    config) cat "$CONF";;
+    qrcode) command -v qrencode >/dev/null 2>&1 || { echo "qrencode not installed"; exit 1; }; qrencode -t ansiutf8 < "$CONF";;
+    *) i18n USAGE; exit 1;;
+  esac
+}
+
+server_ctl(){
+  local act="${1:-}"
+  case "$act" in
+    start)   echo "$(i18n STARTING)"; require_root; systemctl start "$SYSTEMD_UNIT" ;;
+    stop)    echo "$(i18n STOPPING)"; require_root; systemctl stop "$SYSTEMD_UNIT" ;;
+    restart) echo "$(i18n RESTARTING)"; require_root; systemctl restart "$SYSTEMD_UNIT" ;;
+    status)  echo "$(i18n STATUS)"; systemctl --no-pager -l status "$SYSTEMD_UNIT"; wg show || true ;;
+    *) i18n USAGE; exit 1;;
+  esac
+}
+
+txs_stop(){
+  require_root
+  systemctl stop "$SYSTEMD_UNIT" || true
+  systemctl disable "$SYSTEMD_UNIT" >/dev/null 2>&1 || true
+  ip link del wg0 2>/dev/null || true
+  ip link del wg  2>/dev/null || true
+  systemctl daemon-reload || true
+}
+
+txs_uninstall(){
+  require_root
+  read -r -p "Uninstall will stop service (configs kept). Continue? [y/N] " a
+  case "${a,,}" in y|yes) txs_stop; echo "Done.";;
+    *) echo "cancelled";;
+  esac
+}
+
+usage(){ i18n USAGE; }
+
+main(){
+  local top="${1:-}"; shift || true
+  case "$top" in
+    lng) lang_set "${1:-zh}" ;;
+    txs)
+      local sub="${1:-}"; shift || true
+      case "$sub" in
+        init)    init_server "$@" ;;
+        server)  server_ctl "$@" ;;
+        channel)
+          local act="${1:-}"; shift || true
+          case "$act" in
+            create) channel_create "$@" ;;
+            update) local name="$1"; shift; channel_update "$name" "$@" ;;
+            delete) channel_delete "$1" ;;
+            use)    channel_use "$1" ;;
+            list)   channel_list ;;
+            *)      i18n USAGE; exit 1;;
+          esac ;;
+        client)
+          local act="${1:-}"; shift || true
+          case "$act" in
+            create) client_create "$@" ;;
+            update) client_update "$@" ;;
+            delete) client_delete "$@" ;;
+            list)   client_list "$@" ;;
+            *)      local name="$act"; local op="${1:-}"; shift || true; client_show "$name" "$op" "$@" ;;
+          esac ;;
+        stop)      txs_stop ;;
+        uninstall) txs_uninstall ;;
+        *) usage; exit 1;;
+      esac ;;
+    ""|-h|--help|help) usage ;;
+    *) usage; exit 1;;
+  esac
+}
+
+main "$@"
