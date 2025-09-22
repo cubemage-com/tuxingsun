@@ -11,7 +11,8 @@ SYSTEMD_UNIT="cubemage-txs.service"
 
 LANG_CODE="zh"; [[ -f "$CUBE_CFG" ]] && LANG_CODE="$(. "$CUBE_CFG"; echo "${LANG:-zh}")"
 
-tr(){
+# --- FIX: Renamed 'tr' to 'i18n' to avoid conflict with /usr/bin/tr ---
+i18n(){
   local k="$1"
   case "$LANG_CODE" in
     en)
@@ -37,22 +38,18 @@ tr(){
         USAGE) cat <<'U'
 Usage:
   cubemage lng [zh|en]
-
   cubemage txs init [--channel=default] [--address=10.7.0.1/24] [--port=51820] [--wan-if=eth0]
   cubemage txs server start|stop|restart|status
-
   cubemage txs channel create <name> [--address=...] [--port=...] [--wan-if=...]
   cubemage txs channel update <name> [--address=...] [--port=...] [--wan-if=...]
   cubemage txs channel delete <name>
   cubemage txs channel use <name>
   cubemage txs channel list
-
   cubemage txs client create  --channel=<name> --name=<alice> --ip=<10.x.x.x> [--endpoint=host] [--port=51820] [--dns=1.1.1.1] [--mtu=1280] [--allowed=0.0.0.0/0]
   cubemage txs client update  --channel=<name> --name=<alice> [--ip=...] [--endpoint=...] [--port=...] [--dns=...] [--mtu=...] [--allowed=...]
   cubemage txs client delete  --channel=<name> --name=<alice>
   cubemage txs client list    --channel=<name>
   cubemage txs client <name> config|qrcode [--channel=<name>]
-
   cubemage txs stop
   cubemage txs uninstall
 U
@@ -82,22 +79,18 @@ U
         USAGE) cat <<'U'
 用法：
   cubemage lng [zh|en]
-
   cubemage txs init [--channel=default] [--address=10.7.0.1/24] [--port=51820] [--wan-if=eth0]
   cubemage txs server start|stop|restart|status
-
   cubemage txs channel create <name> [--address=...] [--port=...] [--wan-if=...]
   cubemage txs channel update <name> [--address=...] [--port=...] [--wan-if=...]
   cubemage txs channel delete <name>
   cubemage txs channel use <name>
   cubemage txs channel list
-
   cubemage txs client create  --channel=<name> --name=<alice> --ip=<10.x.x.x> [--endpoint=host] [--port=51820] [--dns=1.1.1.1] [--mtu=1280] [--allowed=0.0.0.0/0]
   cubemage txs client update  --channel=<name> --name=<alice> [--ip=...] [--endpoint=...] [--port=...] [--dns=...] [--mtu=...] [--allowed=...]
   cubemage txs client delete  --channel=<name> --name=<alice>
   cubemage txs client list    --channel=<name>
   cubemage txs client <name> config|qrcode [--channel=<name>]
-
   cubemage txs stop
   cubemage txs uninstall
 U
@@ -107,7 +100,7 @@ U
   esac
 }
 
-require_root(){ [[ $EUID -eq 0 ]] || { echo "$(tr NEED_ROOT)"; exit 1; }; }
+require_root(){ [[ $EUID -eq 0 ]] || { echo "$(i18n NEED_ROOT)"; exit 1; }; }
 kv(){ local k="$1"; shift || true; for a in "$@"; do case "$a" in --$k=*) echo "${a#*=}"; return 0;; esac; done; echo ""; }
 wan_if(){ ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $5;exit}'; }
 iface_name(){ ip -o link show type wireguard 2>/dev/null | awk -F': ' 'NR==1{print $2;exit}'; }
@@ -135,7 +128,7 @@ init_server(){
   channel_create "$ch" --address="$addr" --port="$port" --wan-if="$wif"
   systemctl enable "$SYSTEMD_UNIT" >/dev/null 2>&1 || true
   systemctl restart "$SYSTEMD_UNIT" || true
-  echo "$(tr SERVER_READY) ($(tr CH_SWITCH_TO) $ch)"
+  echo "$(i18n SERVER_READY) ($(i18n CH_SWITCH_TO) $ch)"
   systemctl --no-pager -l status "$SYSTEMD_UNIT" || true
 }
 
@@ -144,7 +137,7 @@ lang_set(){
   local code="${1:-zh}"
   mkdir -p "$BASE_DIR"
   echo "LANG=${code}" > "$BASE_DIR/config"
-  echo "$(tr LANG_SET_TO) $code"
+  echo "$(i18n LANG_SET_TO) $code"
 }
 
 active_channel(){
@@ -157,14 +150,20 @@ ensure_dirs(){
   chmod 700 "$BASE_DIR" "$CONF_DIR" "$CHANNELS_DIR" || true
 }
 
+# --- FIX: Robust key generation directly into variables ---
 generate_channel_conf(){
   local name="$1" address="$2" port="$3" wif="$4"
   local dir="$CHANNELS_DIR/$name"
   mkdir -p "$dir/clients.d"; chmod 700 "$dir"
   umask 077
-  local s_priv="$dir/${name}_private.key" s_pub="$dir/${name}_public.key"
-  [[ -s "$s_priv" ]] || wg genkey | tee "$s_priv" | wg pubkey > "$s_pub"
-  local s_priv_val; s_priv_val="$(tr -d '\n' < "$s_priv")"
+  
+  local s_priv_val
+  s_priv_val=$(wg genkey) # Generate key directly to variable
+  
+  # Save keys to files for backup/reference, but don't use them for the config generation
+  echo -n "$s_priv_val" > "$dir/${name}_private.key"
+  echo -n "$s_priv_val" | wg pubkey > "$dir/${name}_public.key"
+
   local net_prefix="${address%/*}"; net_prefix="${net_prefix%.*}.0/24"
 
   cat >"$dir/wg.conf" <<CONF
@@ -196,13 +195,13 @@ channel_create(){
   ln -snf "$CHANNELS_DIR/$name" "$ACTIVE_LINK"
   grep -q '^net\.ipv4\.ip_forward=1' /etc/sysctl.conf 2>/dev/null || echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
   sysctl -p >/dev/null || true
-  echo "$(tr CH_CREATED) $name"
+  echo "$(i18n CH_CREATED) $name"
 }
 
 channel_update(){
   require_root; ensure_dirs
   local name="$1"; shift || true
-  local dir="$CHANNELS_DIR/$name"; [[ -d "$dir" ]] || { echo "$(tr CH_MISSING) $name"; exit 1; }
+  local dir="$CHANNELS_DIR/$name"; [[ -d "$dir" ]] || { echo "$(i18n CH_MISSING) $name"; exit 1; }
   local address port wif
   address="$(kv address "$@")"; port="$(kv port "$@")"; wif="$(kv wan-if "$@")"
   local old_addr old_port
@@ -211,7 +210,7 @@ channel_update(){
   address="${address:-$old_addr}"; port="${port:-$old_port}"; wif="${wif:-$(wan_if || echo eth0)}"
   generate_channel_conf "$name" "$address" "$port" "$wif"
   [[ "$(active_channel)" == "$name" ]] && systemctl restart "$SYSTEMD_UNIT" || true
-  echo "$(tr CH_UPDATED) $name"
+  echo "$(i18n CH_UPDATED) $name"
 }
 
 channel_delete(){
@@ -219,24 +218,43 @@ channel_delete(){
   local name="$1"
   [[ "$(active_channel)" == "$name" ]] && { echo "refuse to delete active channel"; exit 1; }
   rm -rf "$CHANNELS_DIR/$name"
-  echo "$(tr CH_DELETED) $name"
+  echo "$(i18n CH_DELETED) $name"
 }
 
 channel_use(){
   require_root
-  local name="$1"; [[ -d "$CHANNELS_DIR/$name" ]] || { echo "$(tr CH_MISSING) $name"; exit 1; }
+  local name="$1"; [[ -d "$CHANNELS_DIR/$name" ]] || { echo "$(i18n CH_MISSING) $name"; exit 1; }
   ln -snf "$CHANNELS_DIR/$name" "$ACTIVE_LINK"
   systemctl restart "$SYSTEMD_UNIT" || true
-  echo "$(tr CH_SWITCH_TO) $name"
+  echo "$(i18n CH_SWITCH_TO) $name"
 }
 
 channel_list(){
-  echo "$(tr CH_LIST)"
+  echo "$(i18n CH_LIST)"
   ls -1 "$CHANNELS_DIR" 2>/dev/null || echo "(empty)"
   echo "active: $(active_channel || echo none)"
 }
 
-s_pub_from_conf(){ awk -F= '/^PrivateKey/ {gsub(/ /,"",$2);print $2; exit}' "$1" | wg pubkey | tr -d '\n'; }
+# --- FIX: Ultimate robust version, immune to whitespace and environment issues ---
+s_pub_from_conf() (
+    set -e 
+    local conf_file="$1"
+    local WG_BIN
+    WG_BIN="$(command -v wg)" || { echo "'wg' command not found"; exit 1; }
+    local server_priv_key
+    server_priv_key=$(grep '^[[:space:]]*PrivateKey' "$conf_file" | command cut -d '=' -f 2- | command tr -d '[[:space:]]')
+
+    if [[ -z "$server_priv_key" ]]; then
+        echo "FATAL: Could not find 'PrivateKey' in $conf_file" >&2
+        exit 1
+    fi
+    if [[ "${#server_priv_key}" -ne 44 ]]; then
+        echo "FATAL: Invalid 'PrivateKey' length in $conf_file" >&2
+        exit 1
+    fi
+    LC_ALL=C printf "%s" "$server_priv_key" | "$WG_BIN" pubkey | command tr -d '\n'
+)
+
 prefix_from_conf(){ awk -F= '/^Address/ {gsub(/ /,"",$2);print $2; exit}' "$1" | sed -E 's/([0-9]+\.[0-9]+\.[0-9]+)\.[0-9]+\/[0-9]+/\1/'; }
 listen_port_from_conf(){ awk -F= '/^ListenPort/ {gsub(/ /,"",$2);print $2; exit}' "$1"; }
 
@@ -265,33 +283,42 @@ client_create(){
   endpoint="$(kv endpoint "$@")"; port="$(kv port "$@")"
   dns="$(kv dns "$@")"; mtu="$(kv mtu "$@")"; allowed="$(kv allowed "$@")"
   [[ -n "$ch" && -n "$name" ]] || { echo "need --channel and --name"; exit 1; }
-  local dir="$CHANNELS_DIR/$ch"; [[ -d "$dir" ]] || { echo "$(tr CH_MISSING) $ch"; exit 1; }
+  local dir="$CHANNELS_DIR/$ch"; [[ -d "$dir" ]] || { echo "$(i18n CH_MISSING) $ch"; exit 1; }
   local conf="$dir/wg.conf"; local cdir="$dir/clients.d"
   mkdir -p "$cdir"; umask 077
+
   local s_pub; s_pub="$(s_pub_from_conf "$conf")"
   local prefix; prefix="$(prefix_from_conf "$conf")"; ip="${ip:-${prefix}.2}"
   port="${port:-$(listen_port_from_conf "$conf")}"; dns="${dns:-1.1.1.1}"; mtu="${mtu:-1280}"; allowed="${allowed:-0.0.0.0/0}"
 
-  local pkey="$cdir/${name}_private.key" ukey="$cdir/${name}_public.key" cfile="$cdir/${name}.conf" meta="$cdir/${name}.meta"
+  local pkey_file="$cdir/${name}_private.key" ukey_file="$cdir/${name}_public.key" cfile="$cdir/${name}.conf" meta="$cdir/${name}.meta"
   
-  # --- FIX START ---
-  # Replaced the single pipeline with sequential commands to prevent race conditions.
-  wg genkey > "$pkey"
-  wg pubkey < "$pkey" > "$ukey"
+  # --- FIX: Robust key generation directly into variables ---
   local c_priv c_pub
-  c_priv="$(tr -d '\n' < "$pkey")"
-  c_pub="$(tr -d '\n' < "$ukey")"
-  # --- FIX END ---
+  c_priv=$(wg genkey)
+  c_pub=$(printf "%s" "$c_priv" | wg pubkey)
+  
+  if [[ "${#c_priv}" -ne 44 || "${#c_pub}" -ne 44 ]]; then
+      echo "FATAL: Client key generation failed." >&2
+      exit 1
+  fi
+
+  echo -n "$c_priv" > "$pkey_file"
+  echo -n "$c_pub" > "$ukey_file"
 
   local ifc; ifc="$(iface_name || true)"
-  [[ -n "$ifc" ]] && wg set "$ifc" peer "$c_pub" allowed-ips "${ip}/32" || true
+  if [[ -n "$ifc" ]]; then
+    wg set "$ifc" peer "$c_pub" allowed-ips "${ip}/32" || true
+  fi
 
-  cat >>"$conf" <<PEER
+  if ! grep -qF "PublicKey = ${c_pub}" "$conf"; then
+    cat >>"$conf" <<PEER
 
 [Peer]
 PublicKey  = ${c_pub}
 AllowedIPs = ${ip}/32
 PEER
+  fi
 
   local ep_line; [[ -n "$endpoint" ]] && ep_line="Endpoint   = ${endpoint}:${port}" || ep_line="# Endpoint   = <server-ip-or-domain>:${port}"
   cat >"$cfile" <<CCONF
@@ -316,8 +343,8 @@ CONF=${cfile}
 CHANNEL=${ch}
 META
 
-  echo "$(tr CLIENT_CREATED) $name ($(tr CONF_PATH) $cfile)"
-  command -v qrencode >/dev/null 2>&1 && { echo "$(tr QRCODE)"; qrencode -t ansiutf8 < "$cfile"; } || true
+  echo "$(i18n CLIENT_CREATED) $name ($(i18n CONF_PATH) $cfile)"
+  command -v qrencode >/dev/null 2>&1 && { echo "$(i18n QRCODE)"; qrencode -t ansiutf8 < "$cfile"; } || true
 }
 
 client_update(){
@@ -348,7 +375,7 @@ PEER
   local ep_line; [[ -n "$endpoint" ]] && ep_line="Endpoint   = ${endpoint}" || ep_line="# Endpoint   = <server-ip-or-domain>:${port}"
   if [[ -n "$endpoint" && "$endpoint" != *:* ]]; then ep_line="Endpoint   = ${endpoint}:${port}"; fi
 
-  local c_priv; c_priv="$(tr -d '\n' < "$d/${name}_private.key")"
+  local c_priv; c_priv="$(command tr -d '\n' < "$d/${name}_private.key")" # FIX: Use 'command tr'
   cat >"$cfile" <<CCONF
 [Interface]
 PrivateKey = ${c_priv}
@@ -371,7 +398,7 @@ CONF=${cfile}
 CHANNEL=${ch}
 META
 
-  echo "$(tr CLIENT_UPDATED) $name"
+  echo "$(i18n CLIENT_UPDATED) $name"
 }
 
 client_delete(){
@@ -385,7 +412,7 @@ client_delete(){
   [[ -n "$ifc" ]] && wg set "$ifc" peer "$PUB" remove || true
   remove_peer_block "$conf" "$PUB"
   rm -f "$meta" "$d/${name}_private.key" "$d/${name}_public.key" "$CONF" 2>/dev/null || true
-  echo "$(tr CLIENT_DELETED) $name"
+  echo "$(i18n CLIENT_DELETED) $name"
 }
 
 client_list(){
@@ -410,18 +437,18 @@ client_show(){
   case "$op" in
     config) cat "$CONF";;
     qrcode) command -v qrencode >/dev/null 2>&1 || { echo "qrencode not installed"; exit 1; }; qrencode -t ansiutf8 < "$CONF";;
-    *) tr USAGE; exit 1;;
+    *) i18n USAGE; exit 1;;
   esac
 }
 
 server_ctl(){
   local act="${1:-}"
   case "$act" in
-    start)   echo "$(tr STARTING)"; require_root; systemctl start "$SYSTEMD_UNIT" ;;
-    stop)    echo "$(tr STOPPING)"; require_root; systemctl stop "$SYSTEMD_UNIT" ;;
-    restart) echo "$(tr RESTARTING)"; require_root; systemctl restart "$SYSTEMD_UNIT" ;;
-    status)  echo "$(tr STATUS)"; systemctl --no-pager -l status "$SYSTEMD_UNIT"; wg show || true ;;
-    *) tr USAGE; exit 1;;
+    start)   echo "$(i18n STARTING)"; require_root; systemctl start "$SYSTEMD_UNIT" ;;
+    stop)    echo "$(i18n STOPPING)"; require_root; systemctl stop "$SYSTEMD_UNIT" ;;
+    restart) echo "$(i18n RESTARTING)"; require_root; systemctl restart "$SYSTEMD_UNIT" ;;
+    status)  echo "$(i18n STATUS)"; systemctl --no-pager -l status "$SYSTEMD_UNIT"; wg show || true ;;
+    *) i18n USAGE; exit 1;;
   esac
 }
 
@@ -442,7 +469,7 @@ txs_uninstall(){
   esac
 }
 
-usage(){ tr USAGE; }
+usage(){ i18n USAGE; }
 
 main(){
   local top="${1:-}"; shift || true
@@ -461,7 +488,7 @@ main(){
             delete) channel_delete "$1" ;;
             use)    channel_use "$1" ;;
             list)   channel_list ;;
-            *)      tr USAGE; exit 1;;
+            *)      i18n USAGE; exit 1;;
           esac ;;
         client)
           local act="${1:-}"; shift || true
