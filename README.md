@@ -1,7 +1,5 @@
 # Cubemage Tuxingsun — 多通道 WireGuard 管理工具
 
-> 版本：v0.3.0 · 构建：2025-09-21 08:10:57Z
-
 ## 简介
 Cubemage Tuxingsun 是轻量级 WireGuard 管理工具，支持多通道/多客户端/二维码导出，自动设置 NAT/转发（Linux）。默认语言为中文，可 `sudo cubemage lng en` 切换英文。
 
