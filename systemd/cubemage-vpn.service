@@ -1,0 +1,17 @@
+[Unit]
+Description=Cubemage Tuxingsun (WireGuard) service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/env wg-quick up /etc/cubemage/tuxingsun/active/wg.conf
+ExecStop=/usr/bin/env wg-quick down /etc/cubemage/tuxingsun/active/wg.conf
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

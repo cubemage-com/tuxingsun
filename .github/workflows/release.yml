@@ -1,0 +1,29 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create artifacts
+        run: |
+          mkdir -p dist systemd
+          cp install.sh cubemage dist/
+          cp systemd/cubemage-vpn.service dist/
+          chmod +x dist/cubemage
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/install.sh
+            dist/cubemage
+            dist/cubemage-vpn.service
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

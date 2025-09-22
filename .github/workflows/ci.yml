@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  shellcheck-shfmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y shellcheck shfmt
+
+      - name: Syntax check
+        run: |
+          bash -n install.sh
+          bash -n cubemage
+
+      - name: ShellCheck
+        run: |
+          shellcheck -S style install.sh cubemage
+
+      - name: shfmt (diff mode)
+        run: |
+          shfmt -i 2 -ci -d install.sh cubemage || (echo "::error ::shfmt found style issues"; exit 1)
+
+      - name: Basic help run
+        run: |
+          chmod +x cubemage
+          ./cubemage --help || true
+          ./cubemage vpn --help || true
+          ./cubemage vpn server status || true
