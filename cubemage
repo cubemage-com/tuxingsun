@@ -276,11 +276,22 @@ remove_peer_block(){
   ' "$conf" > "$conf.tmp" && mv -f "$conf.tmp" "$conf"
 }
 
+public_ip(){
+  # Attempt to get public IP from multiple sources for reliability
+  curl -s https://ipinfo.io/ip || \
+  curl -s https://api.ipify.org || \
+  curl -s https://icanhazip.com || \
+  dig +short myip.opendns.com @resolver1.opendns.com || \
+  hostname -I | awk '{print $1}'
+}
+
 client_create(){
   require_root
   local ch name ip endpoint port dns mtu allowed
   ch="$(kv channel "$@")"; name="$(kv name "$@")"; ip="$(kv ip "$@")"
-  endpoint="$(kv endpoint "$@")"; port="$(kv port "$@")"
+  # The --endpoint flag now becomes an optional override
+  endpoint="$(kv endpoint "$@")"
+  port="$(kv port "$@")"
   dns="$(kv dns "$@")"; mtu="$(kv mtu "$@")"; allowed="$(kv allowed "$@")"
   [[ -n "$ch" && -n "$name" ]] || { echo "need --channel and --name"; exit 1; }
   local dir="$CHANNELS_DIR/$ch"; [[ -d "$dir" ]] || { echo "$(i18n CH_MISSING) $ch"; exit 1; }
@@ -293,7 +304,6 @@ client_create(){
 
   local pkey_file="$cdir/${name}_private.key" ukey_file="$cdir/${name}_public.key" cfile="$cdir/${name}.conf" meta="$cdir/${name}.meta"
   
-  # --- FIX: Robust key generation directly into variables ---
   local c_priv c_pub
   c_priv=$(wg genkey)
   c_pub=$(printf "%s" "$c_priv" | wg pubkey)
@@ -320,7 +330,19 @@ AllowedIPs = ${ip}/32
 PEER
   fi
 
-  local ep_line; [[ -n "$endpoint" ]] && ep_line="Endpoint   = ${endpoint}:${port}" || ep_line="# Endpoint   = <server-ip-or-domain>:${port}"
+  # --- FIX: Automatically detect public IP for the Endpoint ---
+  local server_ip
+  # Use the endpoint if provided via flag, otherwise auto-detect public IP
+  if [[ -n "$endpoint" ]]; then
+    server_ip="$endpoint"
+  else
+    echo "Detecting server public IP..."
+    server_ip=$(public_ip)
+  fi
+  
+  local ep_line="Endpoint = ${server_ip}:${port}"
+  # --- END FIX ---
+
   cat >"$cfile" <<CCONF
 [Interface]
 PrivateKey = ${c_priv}
